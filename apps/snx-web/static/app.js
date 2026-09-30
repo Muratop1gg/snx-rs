@@ -14,6 +14,10 @@ async function api(path, opts = {}) {
         headers: { "Content-Type": "application/json" },
         ...opts,
     });
+    if (res.status === 401) {
+        window.location.href = "/login";
+        return { ok: false, error: "unauthorized" };
+    }
     try {
         return await res.json();
     } catch (e) {
@@ -76,6 +80,8 @@ function renderStatus(data) {
 
     renderChallenge(data.pending);
 }
+
+
 
 function renderChallenge(pending) {
     const card = $("challenge-card");
@@ -257,6 +263,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     on("btn-create-profile", "click", createProfile);
     on("challenge-answer", "keydown", (e) => {
         if (e.key === "Enter") submitChallenge();
+    });
+
+    on("btn-logout", "click", async () => {
+        await fetch("/logout", { method: "POST" });
+        window.location.href = "/login";
     });
 
     await loadProfiles();

@@ -1,16 +1,13 @@
 mod api;
+mod auth;
 mod browser;
+mod controller_helpers;
 mod prompt;
 mod state;
-mod controller_helpers;
 
-use axum::{
-    body::Body,
-    http::{header, StatusCode, Uri},
-    response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
-    Router,
-};
+use std::sync::Arc;
+
+use axum::{body::Body, http::{header, StatusCode, Uri}, middleware, response::{IntoResponse, Response}, routing::{delete, get, post, put}, Router, Extension};
 use include_dir::{include_dir, Dir};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -27,8 +24,18 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let state = AppState::new();
+    let token = auth::resolve_token();
+    tracing::info!("snx-web access token: {token}");
 
+    let state = Arc::new(AppState::new(token));
+
+    // Публичные роуты (без auth).
+    let public_routes = Router::new()
+        .route("/login", get(auth::login_page))
+        .route("/login-submit", post(auth::login_submit))
+        .route("/logout", post(auth::logout));
+
+    // Приватные API-роуты.
     let api_routes = Router::new()
         .route("/status", get(api::status))
         .route("/profiles", get(api::list_profiles))
@@ -41,11 +48,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/challenge", post(api::challenge))
         .route("/challenge/cancel", post(api::cancel_challenge))
         .route("/fetch-info", post(api::fetch_info))
-        .with_state(state);
+        .with_state(state.clone());
 
     let app = Router::new()
+        .merge(public_routes)
         .nest("/api", api_routes)
         .fallback(static_handler)
+        .layer(middleware::from_fn(auth::require_auth))  // применяется позже
+        .layer(Extension(state.clone()))                 // применяется раньше → доступен middleware
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;

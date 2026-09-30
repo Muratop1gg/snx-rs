@@ -5,18 +5,14 @@ use crate::prompt::WebPrompt;
 #[derive(Clone)]
 pub struct AppState {
     pub prompt: WebPrompt,
+    pub token: String,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(token: String) -> Self {
         Self {
             prompt: WebPrompt::new(),
+            token,
         }
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
     }
 }

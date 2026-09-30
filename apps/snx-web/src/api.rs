@@ -26,7 +26,7 @@ use crate::state::AppState;
 
 // ---------- Статус ----------
 
-pub async fn status(State(state): State<AppState>) -> Json<Value> {
+pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let params = ConnectionProfilesStore::instance().get_connected();
     let prompt = state.prompt.clone();
 
@@ -213,7 +213,7 @@ pub struct ConnectReq {
 }
 
 pub async fn connect(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<ConnectReq>,
 ) -> Json<Value> {
     let store = ConnectionProfilesStore::instance();
@@ -281,7 +281,7 @@ pub async fn connect(
     Json(json!({ "ok": true, "accepted": true }))
 }
 
-pub async fn disconnect(State(state): State<AppState>) -> Json<Value> {
+pub async fn disconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     let params = ConnectionProfilesStore::instance().get_connected();
     let prompt = state.prompt.clone();
 
@@ -294,7 +294,7 @@ pub async fn disconnect(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
-pub async fn reconnect(State(state): State<AppState>) -> Json<Value> {
+pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     let params = ConnectionProfilesStore::instance().get_connected();
     let prompt = state.prompt.clone();
 
@@ -315,7 +315,7 @@ pub struct ChallengeReq {
 }
 
 pub async fn challenge(
-    State(state): State<AppState>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<ChallengeReq>,
 ) -> Json<Value> {
     if state.prompt.submit(req.answer) {
@@ -325,7 +325,7 @@ pub async fn challenge(
     }
 }
 
-pub async fn cancel_challenge(State(state): State<AppState>) -> Json<Value> {
+pub async fn cancel_challenge(State(state): State<Arc<AppState>>) -> Json<Value> {
     state.prompt.cancel();
     Json(json!({ "ok": true }))
 }
