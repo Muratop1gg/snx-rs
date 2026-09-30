@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SNX-RS Web UI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+    <h1>SNX-RS</h1>
+    <div id="status-badge" class="badge badge-unknown">…</div>
+</header>
+
+<main>
+    <section class="card">
+        <h2>Профили</h2>
+        <ul id="profiles-list" class="profiles"></ul>
+    </section>
+    <section class="card">
+        <h2>Подключение</h2>
+
+        <label>
+            Профиль
+            <select id="profile"></select>
+        </label>
+
+        <label>
+            Пароль (опционально)
+            <input id="password" type="password" autocomplete="off">
+        </label>
+
+        <label>
+            MFA-код (опционально)
+            <input id="mfa" type="text" autocomplete="off" placeholder="123456">
+        </label>
+
+        <div class="actions">
+            <button id="btn-connect" class="primary">Connect</button>
+            <button id="btn-disconnect">Disconnect</button>
+            <button id="btn-reconnect">Reconnect</button>
+        </div>
+    </section>
+    <section class="card">
+        <h2>Новый профиль</h2>
+        <label>
+            Имя
+            <input id="new-name" type="text" placeholder="Work VPN">
+        </label>
+        <label>
+            Сервер
+            <input id="new-server" type="text" placeholder="vpn.company.com">
+        </label>
+        <label>
+            Пользователь
+            <input id="new-user" type="text" autocomplete="off">
+        </label>
+        <label>
+            Пароль
+            <input id="new-password" type="password" autocomplete="new-password">
+        </label>
+        <label>
+            Тип туннеля
+            <select id="new-tunnel-type">
+                <option value="IPsec">IPsec</option>
+                <option value="SSL">SSL</option>
+            </select>
+        </label>
+        <label>
+            Login type (опционально, для первого connect)
+            <input id="new-login-type" type="text" placeholder="vpn_XXX">
+        </label>
+        <div class="checks">
+            <label><input id="new-keychain" type="checkbox"> Хранить пароль в keychain</label>
+            <label><input id="new-default-route" type="checkbox"> Весь трафик через VPN</label>
+            <label><input id="new-no-dns" type="checkbox"> Не менять DNS</label>
+            <label><input id="new-ignore-cert" type="checkbox"> Не проверять сертификат сервера</label>
+        </div>
+        <div class="actions">
+            <button id="btn-create-profile" class="primary">Создать</button>
+        </div>
+    </section>
+
+    <section class="card" id="status-card">
+        <h2>Статус</h2>
+        <dl id="status-details"></dl>
+    </section>
+
+    <section class="card hidden" id="challenge-card">
+        <h2>Требуется ввод</h2>
+        <p id="challenge-prompt"></p>
+        <input id="challenge-answer" type="text" autocomplete="off">
+        <div class="actions">
+            <button id="btn-challenge-submit" class="primary">Отправить</button>
+            <button id="btn-challenge-cancel">Отмена</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Лог</h2>
+        <pre id="log"></pre>
+    </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

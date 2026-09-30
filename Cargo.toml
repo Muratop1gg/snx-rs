@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/snxcore", "crates/i18n", "apps/snxctl", "apps/snx-rs", "apps/snx-rs-gui"]
+members = ["crates/snxcore", "crates/i18n", "apps/snxctl", "apps/snx-rs", "apps/snx-rs-gui", "apps/snx-web"]
 resolver = "2"
 
 [workspace.package]
