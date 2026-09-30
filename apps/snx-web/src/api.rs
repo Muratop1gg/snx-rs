@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::{Path, State},
@@ -11,34 +12,51 @@ use snxcore::{
     controller::ServiceCommand,
     model::{
         params::{TunnelParams, TunnelType},
+        proto::GatewayInformation,
         ConnectionStatus,
     },
     platform::{Keychain, Platform, PlatformAccess},
     profiles::ConnectionProfilesStore,
+    tunnel::{connector::CheckPointConnectorFactory, TunnelConnectorFactory},
 };
 use uuid::Uuid;
 
+use crate::controller_helpers::make_controller;
 use crate::state::AppState;
 
 // ---------- Статус ----------
 
-pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
+pub async fn status(State(state): State<AppState>) -> Json<Value> {
     let params = ConnectionProfilesStore::instance().get_connected();
+    let prompt = state.prompt.clone();
 
-    let mut ctrl = state.controller.lock().await;
-    let result = ctrl.command(ServiceCommand::Status, params).await;
-    drop(ctrl);
+    // Отдельный контроллер на каждый status-запрос. `make_controller`
+    // создаёт новое pipe-соединение — это дешево и не блокирует
+    // параллельные запросы.
+    let result = tokio::time::timeout(Duration::from_secs(3), async move {
+        let mut ctrl = make_controller(&prompt);
+        ctrl.command(ServiceCommand::Status, params).await
+    })
+        .await;
+
+    let pending = state.prompt.pending();
 
     match result {
-        Ok(status) => Json(json!({
+        Ok(Ok(status)) => Json(json!({
             "ok": true,
             "status": status_to_json(&status),
-            "pending": state.prompt.pending(),
+            "pending": pending,
         })),
-        Err(e) => Json(json!({
+        Ok(Err(e)) => Json(json!({
             "ok": false,
             "error": e.to_string(),
-            "pending": state.prompt.pending(),
+            "pending": pending,
+        })),
+        Err(_) => Json(json!({
+            "ok": false,
+            "error": "timeout",
+            "pending": pending,
+            "status": { "kind": "connecting" },
         })),
     }
 }
@@ -60,6 +78,7 @@ pub async fn list_profiles() -> Json<Value> {
                 "keychain": p.keychain,
                 "default_route": p.default_route,
                 "no_dns": p.no_dns,
+                "ignore_server_cert": p.ignore_server_cert,
             })
         })
         .collect();
@@ -99,7 +118,6 @@ fn tunnel_type_from_str(s: &str) -> TunnelType {
     }
 }
 
-/// Создать новый профиль.
 pub async fn create_profile(Json(req): Json<ProfileInput>) -> Json<Value> {
     if req.name.trim().is_empty() {
         return Json(json!({ "ok": false, "error": "Имя профиля обязательно" }));
@@ -130,7 +148,6 @@ pub async fn create_profile(Json(req): Json<ProfileInput>) -> Json<Value> {
     Json(json!({ "ok": true, "id": profile_id.to_string() }))
 }
 
-/// Обновить существующий профиль.
 pub async fn update_profile(
     Path(id): Path<String>,
     Json(req): Json<ProfileInput>,
@@ -155,14 +172,12 @@ pub async fn update_profile(
     params.ignore_server_cert = req.ignore_server_cert;
     params.default_route = req.default_route;
     params.no_dns = req.no_dns;
-    // config_file остаётся прежним — не трогаем.
 
     store.save(Arc::new(params));
 
     Json(json!({ "ok": true }))
 }
 
-/// Удалить профиль. Дефолтный удалить нельзя.
 pub async fn delete_profile(Path(id): Path<String>) -> Json<Value> {
     let Ok(uuid) = id.parse::<Uuid>() else {
         return Json(json!({ "ok": false, "error": "Некорректный UUID" }));
@@ -181,8 +196,6 @@ pub async fn delete_profile(Path(id): Path<String>) -> Json<Value> {
     }
 
     store.remove(uuid);
-
-    // Пароль из keychain тоже чистим — как делает GUI.
     let _ = Platform::get().new_keychain().delete_password(uuid).await;
 
     Json(json!({ "ok": true }))
@@ -200,7 +213,7 @@ pub struct ConnectReq {
 }
 
 pub async fn connect(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
     Json(req): Json<ConnectReq>,
 ) -> Json<Value> {
     let store = ConnectionProfilesStore::instance();
@@ -216,7 +229,6 @@ pub async fn connect(
             .new_gateway_connector(Arc::new(params.clone()));
         match connector.get_gateway_information().await {
             Ok(info) => {
-                // Берём первый же show_realm != 0.
                 let login_type = info
                     .login_options_data
                     .as_ref()
@@ -225,8 +237,7 @@ pub async fn connect(
 
                 match login_type {
                     Some(lt) => {
-                        params.login_type = lt.clone();
-                        // Обновляем профиль в сторе, чтобы в следующий раз не ходить.
+                        params.login_type = lt;
                         store.save(Arc::new(params.clone()));
                     }
                     None => {
@@ -246,7 +257,6 @@ pub async fn connect(
         }
     }
 
-    // Если пароль/MFA передали в запросе — переопределяем.
     if let Some(pw) = req.password {
         params.password = SecretString::from(pw);
     }
@@ -257,22 +267,26 @@ pub async fn connect(
     let params = Arc::new(params);
     store.set_connected(params.profile_id);
 
-    let mut ctrl = state.controller.lock().await;
-    let result = ctrl.command(ServiceCommand::Connect, params).await;
-    drop(ctrl);
+    // Запускаем коннект в фоне. HTTP-ответ вернётся сразу,
+    // а фронт будет поллить /api/status и увидит pending (MFA).
+    let prompt = state.prompt.clone();
+    tokio::spawn(async move {
+        let mut ctrl = make_controller(&prompt);
+        match ctrl.command(ServiceCommand::Connect, params).await {
+            Ok(s) => tracing::info!("connect finished: {:?}", s),
+            Err(e) => tracing::warn!("connect failed: {e}"),
+        }
+    });
 
-    match result {
-        Ok(status) => Json(json!({ "ok": true, "status": status_to_json(&status) })),
-        Err(e) => Json(json!({ "ok": false, "error": e.to_string() })),
-    }
+    Json(json!({ "ok": true, "accepted": true }))
 }
 
-pub async fn disconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
+pub async fn disconnect(State(state): State<AppState>) -> Json<Value> {
     let params = ConnectionProfilesStore::instance().get_connected();
+    let prompt = state.prompt.clone();
 
-    let mut ctrl = state.controller.lock().await;
+    let mut ctrl = make_controller(&prompt);
     let result = ctrl.command(ServiceCommand::Disconnect, params).await;
-    drop(ctrl);
 
     match result {
         Ok(status) => Json(json!({ "ok": true, "status": status_to_json(&status) })),
@@ -280,12 +294,12 @@ pub async fn disconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
-pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
+pub async fn reconnect(State(state): State<AppState>) -> Json<Value> {
     let params = ConnectionProfilesStore::instance().get_connected();
+    let prompt = state.prompt.clone();
 
-    let mut ctrl = state.controller.lock().await;
+    let mut ctrl = make_controller(&prompt);
     let result = ctrl.command(ServiceCommand::Reconnect, params).await;
-    drop(ctrl);
 
     match result {
         Ok(status) => Json(json!({ "ok": true, "status": status_to_json(&status) })),
@@ -301,7 +315,7 @@ pub struct ChallengeReq {
 }
 
 pub async fn challenge(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
     Json(req): Json<ChallengeReq>,
 ) -> Json<Value> {
     if state.prompt.submit(req.answer) {
@@ -311,9 +325,75 @@ pub async fn challenge(
     }
 }
 
-pub async fn cancel_challenge(State(state): State<Arc<AppState>>) -> Json<Value> {
+pub async fn cancel_challenge(State(state): State<AppState>) -> Json<Value> {
     state.prompt.cancel();
     Json(json!({ "ok": true }))
+}
+
+// ---------- Fetch info ----------
+
+#[derive(Deserialize)]
+pub struct FetchInfoReq {
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default)]
+    pub ignore_server_cert: bool,
+}
+
+pub async fn fetch_info(Json(req): Json<FetchInfoReq>) -> Json<Value> {
+    let params: Arc<TunnelParams> = if let Some(name) = req.profile.as_deref() {
+        match ConnectionProfilesStore::instance().find_by_name_or_uuid(name) {
+            Some(p) => p,
+            None => return Json(json!({ "ok": false, "error": "Профиль не найден" })),
+        }
+    } else if let Some(server) = req.server {
+        Arc::new(TunnelParams {
+            server_name: server,
+            ignore_server_cert: req.ignore_server_cert,
+            ..Default::default()
+        })
+    } else {
+        return Json(json!({ "ok": false, "error": "Нужен profile или server" }));
+    };
+
+    let connector = CheckPointConnectorFactory::default().new_gateway_connector(params);
+    let info: GatewayInformation = match connector.get_gateway_information().await {
+        Ok(info) => info,
+        Err(e) => {
+            return Json(json!({ "ok": false, "error": e.to_string() }));
+        }
+    };
+
+    let mut options: Vec<Value> = Vec::new();
+    if let Some(data) = &info.login_options_data {
+        for option in data.login_options_list.values() {
+            if option.show_realm == 0 {
+                continue;
+            }
+            let factors: Vec<String> = option
+                .factors
+                .values()
+                .map(|f| f.factor_type.clone())
+                .collect();
+            options.push(json!({
+                "id": option.id,
+                "name": option.display_name,
+                "factors": factors,
+            }));
+        }
+    }
+
+    if options.is_empty() {
+        options.push(json!({
+            "id": "vpn_unspecified",
+            "name": "Default",
+            "factors": [],
+        }));
+    }
+
+    Json(json!({ "ok": true, "options": options }))
 }
 
 // ---------- Утилиты ----------
@@ -337,81 +417,4 @@ fn status_to_json(s: &ConnectionStatus) -> Value {
             "prompt": mfa.prompt,
         }),
     }
-}
-
-use snxcore::{
-    tunnel::{TunnelConnectorFactory, connector::CheckPointConnectorFactory},
-};
-
-#[derive(Deserialize)]
-pub struct FetchInfoReq {
-    /// Имя или UUID профиля.
-    #[serde(default)]
-    pub profile: Option<String>,
-    /// Либо напрямую — сервер (если профиль ещё не сохранён).
-    #[serde(default)]
-    pub server: Option<String>,
-    #[serde(default)]
-    pub ignore_server_cert: bool,
-}
-
-pub async fn fetch_info(Json(req): Json<FetchInfoReq>) -> Json<Value> {
-    // Готовим params для запроса к серверу.
-    let params: Arc<TunnelParams> = if let Some(name) = req.profile.as_deref() {
-        match ConnectionProfilesStore::instance().find_by_name_or_uuid(name) {
-            Some(p) => p,
-            None => return Json(json!({ "ok": false, "error": "Профиль не найден" })),
-        }
-    } else if let Some(server) = req.server {
-        Arc::new(TunnelParams {
-            server_name: server,
-            ignore_server_cert: req.ignore_server_cert,
-            ..Default::default()
-        })
-    } else {
-        return Json(json!({ "ok": false, "error": "Нужен profile или server" }));
-    };
-
-    // Ходим к серверу.
-    let connector = CheckPointConnectorFactory::default().new_gateway_connector(params);
-    let info = match connector.get_gateway_information().await {
-        Ok(info) => info,
-        Err(e) => {
-            return Json(json!({ "ok": false, "error": e.to_string() }));
-        }
-    };
-
-    // Извлекаем список логин-опций.
-    let mut options: Vec<Value> = Vec::new();
-    if let Some(data) = &info.login_options_data {
-        for option in data.login_options_list.values() {
-            if option.show_realm == 0 {
-                continue;
-            }
-            let factors: Vec<String> = option
-                .factors
-                .values()
-                .map(|f| f.factor_type.clone())
-                .collect();
-            options.push(json!({
-                "id": option.id,
-                "name": option.display_name,
-                "factors": factors,
-            }));
-        }
-    }
-
-    // Если опций нет — вернём одну «unspecified» (по аналогии с GUI).
-    if options.is_empty() {
-        options.push(json!({
-            "id": "vpn_unspecified",
-            "name": "Default",
-            "factors": [],
-        }));
-    }
-
-    Json(json!({
-        "ok": true,
-        "options": options,
-    }))
 }

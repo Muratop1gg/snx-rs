@@ -1,22 +1,22 @@
-use tokio::sync::Mutex;
-
-use snxcore::controller::ServiceController;
-
-use crate::browser::WebBrowser;
 use crate::prompt::WebPrompt;
 
+/// Состояние приложения. Хранит только `WebPrompt`, потому что
+/// `ServiceController` теперь создаётся на лету в каждом запросе.
+#[derive(Clone)]
 pub struct AppState {
-    pub controller: Mutex<ServiceController<WebBrowser, WebPrompt>>,
     pub prompt: WebPrompt,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        let prompt = WebPrompt::new();
-        let browser = WebBrowser::new(prompt.clone());
         Self {
-            controller: Mutex::new(ServiceController::new(prompt.clone(), browser)),
-            prompt,
+            prompt: WebPrompt::new(),
         }
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }

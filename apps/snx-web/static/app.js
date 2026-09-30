@@ -209,7 +209,7 @@ async function connect() {
     log(`Connect → ${profile}`);
     const data = await api("/connect", { method: "POST", body: JSON.stringify(body) });
     if (!data.ok) log(`Ошибка: ${data.error}`);
-    else log(`OK: ${data.status.kind}`);
+    else log("Коннект запущен");
     await refresh();
 }
 
@@ -261,5 +261,5 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     await loadProfiles();
     await refresh();
-    setInterval(refresh, 2000);
+    setInterval(refresh, 500);
 });

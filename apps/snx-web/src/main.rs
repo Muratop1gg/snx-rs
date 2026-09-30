@@ -2,8 +2,7 @@ mod api;
 mod browser;
 mod prompt;
 mod state;
-
-use std::sync::Arc;
+mod controller_helpers;
 
 use axum::{
     body::Body,
@@ -28,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let state = Arc::new(AppState::new());
+    let state = AppState::new();
 
     let api_routes = Router::new()
         .route("/status", get(api::status))
