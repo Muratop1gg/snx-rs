@@ -48,8 +48,8 @@ async fn main() -> anyhow::Result<()> {
         .fallback(static_handler)
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
-    tracing::info!("snx-web listening on http://127.0.0.1:8080");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    tracing::info!("snx-web listening on http://0.0.0.0:8080");
     axum::serve(listener, app).await?;
     Ok(())
 }
