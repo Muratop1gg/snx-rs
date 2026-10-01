@@ -29,5 +29,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 secrecy = "0.10"
 include_dir = "0.7"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 rand = "0.8"
 hex = "0.4.3"

@@ -5,9 +5,11 @@ mod controller_helpers;
 mod prompt;
 mod state;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{body::Body, http::{header, StatusCode, Uri}, middleware, response::{IntoResponse, Response}, routing::{delete, get, post, put}, Router, Extension};
+use axum_server::tls_rustls::RustlsConfig;
 use include_dir::{include_dir, Dir};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -58,9 +60,18 @@ async fn main() -> anyhow::Result<()> {
         .layer(Extension(state.clone()))                 // применяется раньше → доступен middleware
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    tracing::info!("snx-web listening on http://0.0.0.0:8080");
-    axum::serve(listener, app).await?;
+    let cert_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("certs");
+    let cert_path = cert_dir.join("cert.pem");
+    let key_path = cert_dir.join("key.pem");
+
+    let tls_config = RustlsConfig::from_pem_file(&cert_path, &key_path).await?;
+
+    let addr: SocketAddr = "0.0.0.0:8443".parse()?;
+    tracing::info!("snx-web listening on https://{addr}");
+
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service())
+        .await?;
     Ok(())
 }
 

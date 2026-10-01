@@ -88,7 +88,7 @@ pub async fn login_submit(
 
     // Устанавливаем cookie на 30 дней.
     let cookie = format!(
-        "{COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000",
+        "{COOKIE_NAME}={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000",
         state.token
     );
 
