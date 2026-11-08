@@ -233,6 +233,63 @@ async function reconnect() {
     await refresh();
 }
 
+function renderProxyStatus(p) {
+    let state = "выключен";
+    if (p.running) state = "работает";
+    else if (p.enabled) state = "ошибка";
+    $("proxy-state").textContent = state;
+    $("proxy-active").textContent = p.active_connections;
+
+    const err = $("proxy-error");
+    err.textContent = p.error ?? "";
+    err.classList.toggle("hidden", !p.error);
+
+    const examples = $("proxy-examples");
+    examples.classList.toggle("hidden", !p.running);
+    if (p.running) {
+        const port = p.listen.slice(p.listen.lastIndexOf(":") + 1);
+        const host = window.location.hostname;
+        examples.textContent = [
+            `socks5h://ЛОГИН:ПАРОЛЬ@${host}:${port}`,
+            `http://ЛОГИН:ПАРОЛЬ@${host}:${port}`,
+            `https://ЛОГИН:ПАРОЛЬ@${host}:${port}`,
+        ].join("\n");
+    }
+}
+
+function fillProxyForm(p) {
+    $("proxy-enabled").checked = p.enabled;
+    $("proxy-listen").value = p.listen;
+    $("proxy-user").value = p.user;
+    $("proxy-password").value = "";
+    $("proxy-password").placeholder = p.has_password ? "•••••• (оставьте пустым, чтобы не менять)" : "";
+}
+
+async function refreshProxy(fillForm = false) {
+    const data = await api("/proxy");
+    if (!data.ok) return;
+    renderProxyStatus(data.proxy);
+    if (fillForm) fillProxyForm(data.proxy);
+}
+
+async function saveProxy() {
+    const body = {
+        enabled: $("proxy-enabled").checked,
+        listen: $("proxy-listen").value.trim(),
+        user: $("proxy-user").value.trim(),
+        password: $("proxy-password").value,
+    };
+    const data = await api("/proxy", { method: "PUT", body: JSON.stringify(body) });
+    if (!data.ok) {
+        log(`Ошибка прокси: ${data.error}`);
+        await refreshProxy();
+        return;
+    }
+    renderProxyStatus(data.proxy);
+    fillProxyForm(data.proxy);
+    log(data.proxy.running ? `Прокси запущен на ${data.proxy.listen}` : "Прокси выключен");
+}
+
 async function submitChallenge() {
     const answer = $("challenge-answer").value;
     const data = await api("/challenge", {
@@ -261,6 +318,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     on("btn-challenge-submit", "click", submitChallenge);
     on("btn-challenge-cancel", "click", cancelChallenge);
     on("btn-create-profile", "click", createProfile);
+    on("btn-proxy-save", "click", saveProxy);
     on("challenge-answer", "keydown", (e) => {
         if (e.key === "Enter") submitChallenge();
     });
@@ -272,5 +330,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     await loadProfiles();
     await refresh();
+    await refreshProxy(true);
     setInterval(refresh, 500);
+    setInterval(refreshProxy, 3000);
 });

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{Extension, Request},
@@ -7,40 +8,74 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
-use rand::Rng;
+use hmac::{Hmac, KeyInit, Mac};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use sha2::Sha256;
 
+use crate::config::{credentials_match, WebConfig};
 use crate::state::AppState;
 
-pub const COOKIE_NAME: &str = "snx_token";
+pub const COOKIE_NAME: &str = "snx_session";
+const SESSION_LIFETIME_SECS: u64 = 30 * 24 * 60 * 60;
+const LOGIN_FAILURE_DELAY: Duration = Duration::from_secs(1);
 
-/// Сгенерировать случайный токен, если не задан через env.
-pub fn resolve_token() -> String {
-    if let Ok(t) = std::env::var("SNX_WEB_TOKEN") {
-        if !t.trim().is_empty() {
-            return t;
-        }
-    }
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 32] = rng.r#gen();
-    hex::encode(bytes)
+pub struct AuthSettings {
+    user: String,
+    password: SecretString,
+    session_secret: SecretString,
 }
 
-/// Проверить, что запрос авторизован (есть валидная cookie).
-pub fn is_authed(req: &Request, token: &str) -> bool {
-    let Some(cookie_header) = req.headers().get(header::COOKIE) else {
-        return false;
-    };
-    let Ok(cookie_str) = cookie_header.to_str() else {
-        return false;
-    };
-    for part in cookie_str.split(';') {
-        let part = part.trim();
-        if let Some(value) = part.strip_prefix(&format!("{COOKIE_NAME}=")) {
-            return value == token;
+impl AuthSettings {
+    pub fn from_config(config: &WebConfig) -> Self {
+        Self {
+            user: config.web_user.clone(),
+            password: config.web_password.clone(),
+            session_secret: config.session_secret.clone(),
         }
     }
-    false
+
+    // Пароль входит в подпись, чтобы его смена отзывала все выданные сессии.
+    fn session_mac(&self, expires: u64) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.session_secret.expose_secret().as_bytes())
+            .expect("HMAC accepts keys of any length");
+        mac.update(self.user.as_bytes());
+        mac.update(&[0]);
+        mac.update(self.password.expose_secret().as_bytes());
+        mac.update(&[0]);
+        mac.update(&expires.to_be_bytes());
+        mac
+    }
+
+    fn issue_session(&self, now: u64) -> String {
+        let expires = now + SESSION_LIFETIME_SECS;
+        let signature = self.session_mac(expires).finalize().into_bytes();
+        format!("{expires}.{}", hex::encode(signature))
+    }
+
+    fn session_is_valid(&self, session: &str, now: u64) -> bool {
+        let Some((expires, signature)) = session.split_once('.') else {
+            return false;
+        };
+        let (Ok(expires), Ok(signature)) = (expires.parse::<u64>(), hex::decode(signature)) else {
+            return false;
+        };
+        expires > now && self.session_mac(expires).verify_slice(&signature).is_ok()
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+fn is_authed(req: &Request, auth: &AuthSettings) -> bool {
+    let Some(cookie_str) = req.headers().get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    cookie_str
+        .split(';')
+        .filter_map(|part| part.trim().strip_prefix(COOKIE_NAME)?.strip_prefix('='))
+        .any(|value| auth.session_is_valid(value, unix_now()))
 }
 
 /// Middleware: пускает дальше только с валидной cookie.
@@ -56,7 +91,7 @@ pub async fn require_auth(
         return next.run(req).await;
     }
 
-    if is_authed(&req, &state.token) {
+    if is_authed(&req, &state.auth) {
         return next.run(req).await;
     }
 
@@ -75,21 +110,24 @@ pub async fn login_page() -> Html<&'static str> {
 
 #[derive(Deserialize)]
 pub struct LoginForm {
-    pub token: String,
+    pub user: String,
+    pub password: String,
 }
 
 pub async fn login_submit(
     Extension(state): Extension<Arc<AppState>>,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    if form.token != state.token {
+    let auth = &state.auth;
+    if !credentials_match(&form.user, &form.password, &auth.user, &auth.password) {
+        tracing::warn!("web login failed");
+        tokio::time::sleep(LOGIN_FAILURE_DELAY).await;
         return (StatusCode::UNAUTHORIZED, Html(LOGIN_HTML_ERR)).into_response();
     }
 
-    // Устанавливаем cookie на 30 дней.
     let cookie = format!(
-        "{COOKIE_NAME}={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000",
-        state.token
+        "{COOKIE_NAME}={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={SESSION_LIFETIME_SECS}",
+        auth.issue_session(unix_now())
     );
 
     let mut resp = Redirect::to("/").into_response();
@@ -129,7 +167,8 @@ const LOGIN_HTML: &str = r#"<!doctype html>
 <body>
   <form class="wrap" method="POST" action="/login-submit">
     <h1>SNX-RS</h1>
-    <input type="password" name="token" placeholder="Токен доступа" autofocus required>
+    <input type="text" name="user" placeholder="Логин" autocomplete="username" autofocus required>
+    <input type="password" name="password" placeholder="Пароль" autocomplete="current-password" required style="margin-top:.5rem">
     <button type="submit">Войти</button>
   </form>
 </body>
@@ -141,8 +180,49 @@ const LOGIN_HTML_ERR: &str = r#"<!doctype html>
 <body style="font-family:system-ui;background:#f4f5f7;text-align:center;padding:15vh 0;">
   <div style="display:inline-block;background:#fff;padding:2rem;border-radius:10px;
               border:1px solid #e5e7eb;">
-    <p style="color:#dc2626;margin:0 0 1rem;">Неверный токен</p>
+    <p style="color:#dc2626;margin:0 0 1rem;">Неверный логин или пароль</p>
     <a href="/login">Попробовать снова</a>
   </div>
 </body>
 </html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(password: &str) -> AuthSettings {
+        AuthSettings {
+            user: "admin".into(),
+            password: SecretString::from(password),
+            session_secret: SecretString::from("secret"),
+        }
+    }
+
+    #[test]
+    fn session_survives_reload_of_same_settings() {
+        let session = settings("pw").issue_session(1000);
+        assert!(settings("pw").session_is_valid(&session, 1001));
+    }
+
+    #[test]
+    fn session_expires() {
+        let auth = settings("pw");
+        let session = auth.issue_session(1000);
+        assert!(!auth.session_is_valid(&session, 1000 + SESSION_LIFETIME_SECS));
+    }
+
+    #[test]
+    fn password_change_revokes_session() {
+        let session = settings("old").issue_session(1000);
+        assert!(!settings("new").session_is_valid(&session, 1001));
+    }
+
+    #[test]
+    fn extended_expiry_is_rejected() {
+        let auth = settings("pw");
+        let session = auth.issue_session(1000);
+        let (_, signature) = session.split_once('.').unwrap();
+        assert!(!auth.session_is_valid(&format!("99999999999.{signature}"), 1001));
+        assert!(!auth.session_is_valid("garbage", 1001));
+    }
+}

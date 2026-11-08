@@ -191,3 +191,5 @@ button.primary:hover { background: var(--primary-hover); border-color: var(--pri
     width: auto;
     margin: 0;
 }
+
+.error { color: #dc2626; margin: .25rem 0; }

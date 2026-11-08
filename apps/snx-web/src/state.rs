@@ -1,18 +1,20 @@
+use crate::auth::AuthSettings;
 use crate::prompt::WebPrompt;
+use crate::proxy::ProxyManager;
 
-/// Состояние приложения. Хранит только `WebPrompt`, потому что
-/// `ServiceController` теперь создаётся на лету в каждом запросе.
-#[derive(Clone)]
+/// Состояние приложения. `ServiceController` создаётся на лету в каждом запросе.
 pub struct AppState {
     pub prompt: WebPrompt,
-    pub token: String,
+    pub auth: AuthSettings,
+    pub proxy: ProxyManager,
 }
 
 impl AppState {
-    pub fn new(token: String) -> Self {
+    pub fn new(auth: AuthSettings, proxy: ProxyManager) -> Self {
         Self {
             prompt: WebPrompt::new(),
-            token,
+            auth,
+            proxy,
         }
     }
 }

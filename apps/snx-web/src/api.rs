@@ -22,6 +22,7 @@ use snxcore::{
 use uuid::Uuid;
 
 use crate::controller_helpers::make_controller;
+use crate::proxy::ProxyUpdate;
 use crate::state::AppState;
 
 // ---------- Статус ----------
@@ -394,6 +395,27 @@ pub async fn fetch_info(Json(req): Json<FetchInfoReq>) -> Json<Value> {
     }
 
     Json(json!({ "ok": true, "options": options }))
+}
+
+// ---------- Прокси ----------
+
+pub async fn proxy_status(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(proxy_status_json(&state).await)
+}
+
+pub async fn update_proxy(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProxyUpdate>,
+) -> Json<Value> {
+    match state.proxy.update(req).await {
+        Ok(()) => Json(proxy_status_json(&state).await),
+        Err(e) => Json(json!({ "ok": false, "error": format!("{e:#}") })),
+    }
+}
+
+async fn proxy_status_json(state: &AppState) -> Value {
+    let status = state.proxy.status().await;
+    json!({ "ok": true, "proxy": status })
 }
 
 // ---------- Утилиты ----------

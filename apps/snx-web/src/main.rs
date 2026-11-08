@@ -1,8 +1,10 @@
 mod api;
 mod auth;
 mod browser;
+mod config;
 mod controller_helpers;
 mod prompt;
+mod proxy;
 mod state;
 
 use std::net::SocketAddr;
@@ -26,10 +28,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let token = auth::resolve_token();
-    tracing::info!("snx-web access token: {token}");
+    let config = config::WebConfig::load(&config::config_path())?;
+    tracing::info!("snx-web config: {}", config.path.display());
 
-    let state = Arc::new(AppState::new(token));
+    let cert_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("certs");
+    let cert_path = cert_dir.join("cert.pem");
+    let key_path = cert_dir.join("key.pem");
+    let tls_config = RustlsConfig::from_pem_file(&cert_path, &key_path).await?;
+
+    let auth_settings = auth::AuthSettings::from_config(&config);
+    let proxy_manager = proxy::ProxyManager::new(config.path.clone(), config.proxy, tls_config.get_inner());
+    proxy_manager.start_configured().await;
+
+    let state = Arc::new(AppState::new(auth_settings, proxy_manager));
 
     // Публичные роуты (без auth).
     let public_routes = Router::new()
@@ -50,6 +61,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/challenge", post(api::challenge))
         .route("/challenge/cancel", post(api::cancel_challenge))
         .route("/fetch-info", post(api::fetch_info))
+        .route("/proxy", get(api::proxy_status))
+        .route("/proxy", put(api::update_proxy))
         .with_state(state.clone());
 
     let app = Router::new()
@@ -59,12 +72,6 @@ async fn main() -> anyhow::Result<()> {
         .layer(middleware::from_fn(auth::require_auth))  // применяется позже
         .layer(Extension(state.clone()))                 // применяется раньше → доступен middleware
         .layer(TraceLayer::new_for_http());
-
-    let cert_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("certs");
-    let cert_path = cert_dir.join("cert.pem");
-    let key_path = cert_dir.join("key.pem");
-
-    let tls_config = RustlsConfig::from_pem_file(&cert_path, &key_path).await?;
 
     let addr: SocketAddr = "0.0.0.0:8443".parse()?;
     tracing::info!("snx-web listening on https://{addr}");

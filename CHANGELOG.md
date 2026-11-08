@@ -1,5 +1,7 @@
 ## v6.4.2 (TBD)
 * Added the `auto-disconnect` option which disconnects the tunnel when the GUI frontend exits.
+* Web UI: added a SOCKS5/HTTP/HTTPS proxy with login and password for other devices, managed from the web interface. See [Web UI](https://github.com/ancwrd1/snx-rs/blob/main/docs/web-ui.md).
+* Web UI: replaced the access token generated at each start with a login and password from `snx-web.conf`; sessions now survive restarts.
 
 ## v6.4.1 (2026-09-24)
 * macOS: enabled IPsec keepalive, so a dead tunnel is detected without waiting for the next rekey.

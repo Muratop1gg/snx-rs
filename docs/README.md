@@ -6,6 +6,7 @@
 * [Implemented Features](features.md)
 * [DNS Resolver Configuration and Privacy](dns-configuration.md)
 * [Tunnel Type Selection](tunnel-types.md)
+* [Web UI](web-ui.md)
 * [Configuration Options](options.md)
 * [Command Line Usage](command-line-usage.md)
 * [Usage Examples](usage-examples.md)

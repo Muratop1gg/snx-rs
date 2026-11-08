@@ -82,6 +82,32 @@
         </div>
     </section>
 
+    <section class="card">
+        <h2>Прокси для других устройств</h2>
+        <p class="profile-meta">Статус: <strong id="proxy-state">…</strong> · соединений: <span id="proxy-active">0</span></p>
+        <p class="error hidden" id="proxy-error"></p>
+        <div class="checks">
+            <label><input id="proxy-enabled" type="checkbox"> Включить прокси</label>
+        </div>
+        <label>
+            Адрес и порт
+            <input id="proxy-listen" type="text" placeholder="0.0.0.0:1080">
+        </label>
+        <label>
+            Логин
+            <input id="proxy-user" type="text" autocomplete="off">
+        </label>
+        <label>
+            Пароль
+            <input id="proxy-password" type="password" autocomplete="new-password">
+        </label>
+        <div class="actions">
+            <button id="btn-proxy-save" class="primary">Применить</button>
+        </div>
+        <p class="profile-meta">Один порт для SOCKS5, HTTP и HTTPS (TLS). Логин и пароль обязательны.</p>
+        <pre id="proxy-examples" class="hidden"></pre>
+    </section>
+
     <section class="card" id="status-card">
         <h2>Статус</h2>
         <dl id="status-details"></dl>
